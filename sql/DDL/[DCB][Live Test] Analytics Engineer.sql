@@ -1,116 +1,110 @@
-CREATE TABLE "purchase" (
-  "purchase_id" bigint,
-  "buyer_id" bigint,
-  "prod_item_id" bigint,
-  "order_date" date,
-  "release_date" date,
-  "producer_id" bigint,
-  "purchase_partition" bigint,
-  "prod_item_partition" bigint,
-  "purchase_total_value" float,
-  "purchase_status" string,
-  "transaction_datetime" datetime,
-  "transaction_date" date
+CREATE SCHEMA IF NOT EXISTS raw;
+CREATE SCHEMA IF NOT EXISTS mart;
+
+
+
+-- purchase_cdc
+-- Grão: 1 evento de alteração de compra (CDC).
+
+CREATE TABLE IF NOT EXISTS raw.purchase_cdc (
+  purchase_id           BIGINT NOT NULL,
+  purchase_partition    BIGINT NOT NULL,
+  buyer_id              BIGINT NULL,
+  prod_item_id          BIGINT NULL,
+  prod_item_partition   BIGINT NULL,
+  producer_id           BIGINT NULL,
+  order_date            DATE NULL,
+  release_date          DATE NULL,
+  purchase_total_value  NUMERIC(18,2) NULL,
+  purchase_status       TEXT NULL,
+  -- CDC
+  op                    CHAR(1) NOT NULL CHECK (op IN ('c','u','d')),
+  event_ts              TIMESTAMP NOT NULL,   -- quando o evento ocorreu na origem
+  ingestion_ts          TIMESTAMP NOT NULL,   -- quando chegou no lake/warehouse
+  -- colunas auxiliares (deriváveis)
+  transaction_date      DATE GENERATED ALWAYS AS (ingestion_ts::date) STORED,
+  PRIMARY KEY (purchase_id, purchase_partition, event_ts, ingestion_ts)
 );
 
-CREATE TABLE "order_transaction_cost_hist" (
-  "purchase_id" bigint,
-  "purchase_partition" bigint,
-  "order_transaction_cost_vat_value" float,
-  "order_transaction_cost_installment_value" float,
-  "order_transaction_cost_date" date,
-  "transaction_datetime" datetime,
-  "transaction_date" date
+CREATE INDEX IF NOT EXISTS ix_purchase_cdc_ingestion
+  ON raw.purchase_cdc (ingestion_ts);
+
+CREATE INDEX IF NOT EXISTS ix_purchase_cdc_event
+  ON raw.purchase_cdc (purchase_id, purchase_partition, event_ts DESC, ingestion_ts DESC);
+
+
+
+
+-- product_item_cdc
+--Grão: 1 evento CDC por item (pode haver múltiplos itens por compra).
+
+CREATE TABLE IF NOT EXISTS raw.product_item_cdc (
+  prod_item_id         BIGINT NOT NULL,
+  prod_item_partition  BIGINT NOT NULL,
+  purchase_id          BIGINT NULL,  -- ajuda no join (se existir no source)
+  purchase_partition   BIGINT NULL,
+  product_id           BIGINT NULL,
+  item_quantity        INT NULL,
+  purchase_value       NUMERIC(18,2) NULL,
+  -- CDC
+  op                   CHAR(1) NOT NULL CHECK (op IN ('c','u','d')),
+  event_ts             TIMESTAMP NOT NULL,
+  ingestion_ts         TIMESTAMP NOT NULL,
+  transaction_date     DATE GENERATED ALWAYS AS (ingestion_ts::date) STORED,
+  PRIMARY KEY (prod_item_id, prod_item_partition, event_ts, ingestion_ts)
 );
 
-CREATE TABLE "product_item" (
-  "prod_item_id" bigint,
-  "prod_item_partition" bigint,
-  "product_id" bigint,
-  "item_quantity" int,
-  "purchase_value" float,
-  "transaction_datetime" datetime,
-  "transaction_date" date
+
+CREATE INDEX IF NOT EXISTS ix_product_item_cdc_ingestion
+  ON raw.product_item_cdc (ingestion_ts);
+
+CREATE INDEX IF NOT EXISTS ix_product_item_cdc_event
+  ON raw.product_item_cdc (prod_item_id, prod_item_partition, event_ts DESC, ingestion_ts DESC);
+
+CREATE INDEX IF NOT EXISTS ix_product_item_cdc_purchase
+  ON raw.product_item_cdc (purchase_id, purchase_partition);
+
+
+-- purchase_extra_info_cdc
+-- Grão: 1 evento CDC por compra para atributos extras (subsidiary).
+CREATE TABLE IF NOT EXISTS raw.purchase_extra_info_cdc (
+  purchase_id          BIGINT NOT NULL,
+  purchase_partition   BIGINT NOT NULL,
+  subsidiary           TEXT NULL,
+  -- CDC
+  op                   CHAR(1) NOT NULL CHECK (op IN ('c','u','d')),
+  event_ts             TIMESTAMP NOT NULL,
+  ingestion_ts         TIMESTAMP NOT NULL,
+  transaction_date     DATE GENERATED ALWAYS AS (ingestion_ts::date) STORED,
+  PRIMARY KEY (purchase_id, purchase_partition, event_ts, ingestion_ts)
 );
 
-CREATE TABLE "purchase_extra_info" (
-  "purchase_id" bigint,
-  "purchase_partition" bigint,
-  "subsidiary" string,
-  "transaction_datetime" datetime,
-  "transaction_date" date
+CREATE INDEX IF NOT EXISTS ix_extra_info_cdc_ingestion
+  ON raw.purchase_extra_info_cdc (ingestion_ts);
+
+CREATE INDEX IF NOT EXISTS ix_extra_info_cdc_event
+  ON raw.purchase_extra_info_cdc (purchase_id, purchase_partition, event_ts DESC, ingestion_ts DESC);
+
+
+
+-- order_transaction_cost_hist_cdc (bônus)
+-- Grão: 1 evento por componente de custo (ex.: VAT, installment) por compra.
+CREATE TABLE IF NOT EXISTS raw.order_transaction_cost_hist_cdc (
+  purchase_id            BIGINT NOT NULL,
+  purchase_partition     BIGINT NOT NULL,
+  order_transaction_cost_vat_value          NUMERIC(18,2) NULL,
+  order_transaction_cost_installment_value  NUMERIC(18,2) NULL,
+  order_transaction_cost_date               DATE NULL,
+  -- CDC
+  op                     CHAR(1) NOT NULL CHECK (op IN ('c','u','d')),
+  event_ts               TIMESTAMP NOT NULL,
+  ingestion_ts           TIMESTAMP NOT NULL,
+  transaction_date       DATE GENERATED ALWAYS AS (ingestion_ts::date) STORED,
+  PRIMARY KEY (purchase_id, purchase_partition, event_ts, ingestion_ts)
 );
 
-COMMENT ON COLUMN "purchase"."purchase_id" IS 'identificador da compra';
+CREATE INDEX IF NOT EXISTS ix_cost_cdc_ingestion
+  ON raw.order_transaction_cost_hist_cdc (ingestion_ts);
 
-COMMENT ON COLUMN "purchase"."buyer_id" IS 'identificador do comprador';
-
-COMMENT ON COLUMN "purchase"."prod_item_id" IS 'identificador do item de compra';
-
-COMMENT ON COLUMN "purchase"."order_date" IS 'data do pedido de compra';
-
-COMMENT ON COLUMN "purchase"."release_date" IS 'data de liberação da compra mediante a confirmação do pagamento';
-
-COMMENT ON COLUMN "purchase"."producer_id" IS 'identificador do produtor';
-
-COMMENT ON COLUMN "purchase"."purchase_partition" IS 'partição no lake para a compra';
-
-COMMENT ON COLUMN "purchase"."prod_item_partition" IS 'partição no lake para o item de compra';
-
-COMMENT ON COLUMN "purchase"."purchase_total_value" IS 'valor total da compra';
-
-COMMENT ON COLUMN "purchase"."purchase_status" IS 'status da compra: INICIADA, APROVADA, CANCELADA, REEMBOLSADA';
-
-COMMENT ON COLUMN "purchase"."transaction_datetime" IS 'momento de inserção do dado no lake';
-
-COMMENT ON COLUMN "purchase"."transaction_date" IS 'data de inserção do dado no lake';
-
-COMMENT ON COLUMN "order_transaction_cost_hist"."purchase_id" IS 'identificador da compra';
-
-COMMENT ON COLUMN "order_transaction_cost_hist"."purchase_partition" IS 'partição no lake para a compra';
-
-COMMENT ON COLUMN "order_transaction_cost_hist"."order_transaction_cost_vat_value" IS 'valor VAT referente a compra';
-
-COMMENT ON COLUMN "order_transaction_cost_hist"."order_transaction_cost_installment_value" IS 'valor do parcelamento da compra';
-
-COMMENT ON COLUMN "order_transaction_cost_hist"."order_transaction_cost_date" IS 'data da efetivação do parcelamento';
-
-COMMENT ON COLUMN "order_transaction_cost_hist"."transaction_datetime" IS 'momento de inserção do dado no lake';
-
-COMMENT ON COLUMN "order_transaction_cost_hist"."transaction_date" IS 'data de inserção do dado no lake';
-
-COMMENT ON COLUMN "product_item"."prod_item_id" IS 'identificador do item de compra';
-
-COMMENT ON COLUMN "product_item"."prod_item_partition" IS 'partição no lake para o item da compra';
-
-COMMENT ON COLUMN "product_item"."product_id" IS 'identificador do produto';
-
-COMMENT ON COLUMN "product_item"."item_quantity" IS 'quantidade comprada por item';
-
-COMMENT ON COLUMN "product_item"."purchase_value" IS 'valor do item de compra';
-
-COMMENT ON COLUMN "product_item"."transaction_datetime" IS 'momento de inserção do dado no lake';
-
-COMMENT ON COLUMN "product_item"."transaction_date" IS 'data de inserção do dado no lake';
-
-COMMENT ON COLUMN "purchase_extra_info"."purchase_id" IS 'identificador da compra';
-
-COMMENT ON COLUMN "purchase_extra_info"."purchase_partition" IS 'partição no lake para a compra';
-
-COMMENT ON COLUMN "purchase_extra_info"."subsidiary" IS 'Empresa que, embora controlada (dirigida) por outra, possui grande parte ou o total de suas ações';
-
-COMMENT ON COLUMN "purchase_extra_info"."transaction_datetime" IS 'momento de inserção do dado no lake';
-
-COMMENT ON COLUMN "purchase_extra_info"."transaction_date" IS 'data de inserção do dado no lake';
-
-ALTER TABLE "product_item" ADD FOREIGN KEY ("prod_item_id") REFERENCES "purchase" ("prod_item_id");
-
-ALTER TABLE "product_item" ADD FOREIGN KEY ("prod_item_partition") REFERENCES "purchase" ("prod_item_partition");
-
-ALTER TABLE "order_transaction_cost_hist" ADD FOREIGN KEY ("purchase_id") REFERENCES "purchase" ("purchase_id");
-
-ALTER TABLE "order_transaction_cost_hist" ADD FOREIGN KEY ("purchase_partition") REFERENCES "purchase" ("purchase_partition");
-
-ALTER TABLE "purchase_extra_info" ADD FOREIGN KEY ("purchase_id") REFERENCES "purchase" ("purchase_id");
-
-ALTER TABLE "purchase_extra_info" ADD FOREIGN KEY ("purchase_partition") REFERENCES "purchase" ("purchase_partition");
+CREATE INDEX IF NOT EXISTS ix_cost_cdc_event
+  ON raw.order_transaction_cost_hist_cdc (purchase_id, purchase_partition, event_ts DESC, ingestion_ts DESC);
