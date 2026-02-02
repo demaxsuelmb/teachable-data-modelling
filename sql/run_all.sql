@@ -228,7 +228,6 @@ VALUES
 (1, 202301, 10, 1001, 202301, 500,
  '2023-01-06', '2023-01-06', 100.00, 'APROVADA',
  'c', '2023-01-06 10:00:00', '2023-01-07 02:00:00'),
-
 -- Purchase 2: aparece como aprovada no snapshot 2023-01-07,
 -- mas chega correção tardia cancelando no snapshot 2023-01-10
 (2, 202301, 11, 1002, 202301, 501,
@@ -237,7 +236,6 @@ VALUES
 (2, 202301, 11, 1002, 202301, 501,
  '2023-01-05', '2023-01-05', 200.00, 'CANCELADA',
  'u', '2023-01-05 12:00:00', '2023-01-10 01:00:00'),
-
 -- Purchase 3: inicialmente sem release_date (não entra no GMV no snapshot 2023-01-07)
 -- depois recebe release_date (entra no GMV no snapshot 2023-01-10)
 (3, 202301, 12, 1003, 202301, 502,
